@@ -77,7 +77,7 @@ type SimulatedBackend struct {
 func NewSimulatedBackendWithDatabase(database ethdb.Database, alloc core.GenesisAlloc, gasLimit uint64) *SimulatedBackend {
 	genesis := core.Genesis{Config: params.AllEthashProtocolChanges, GasLimit: gasLimit, Alloc: alloc}
 	genesis.MustCommit(database)
-	blockchain, _ := core.NewBlockChain(database, nil, genesis.Config, ethash.NewFaker(), vm.Config{}, nil, nil)
+    blockchain, _ := core.NewBlockChain(database, nil, nil, genesis.Config, ethash.NewFaker(), vm.Config{}, nil, nil)
 
 	backend := &SimulatedBackend{
 		database:   database,
@@ -126,7 +126,7 @@ func (b *SimulatedBackend) rollback() {
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil)
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil, nil)
 }
 
 // stateByBlockNumber retrieves a state by a given blocknumber.
@@ -575,7 +575,7 @@ func (b *SimulatedBackend) SendTransaction(ctx context.Context, tx *types.Transa
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil)
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil, nil)
 	return nil
 }
 
@@ -688,7 +688,7 @@ func (b *SimulatedBackend) AdjustTime(adjustment time.Duration) error {
 	statedb, _ := b.blockchain.State()
 
 	b.pendingBlock = blocks[0]
-	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil)
+	b.pendingState, _ = state.New(b.pendingBlock.Root(), statedb.Database(), nil, nil)
 
 	return nil
 }

@@ -649,6 +649,7 @@ func (n *Node) OpenDatabase(name string, cache, handles int, namespace string) (
 // also attaching a chain freezer to it that moves ancient chain data from the
 // database to immutable append-only files. If the node is an ephemeral one, a
 // memory database is returned.
+// TODO: this where state trie db also gets created.
 func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, freezer, namespace string) (ethdb.Database, error) {
 	if n.config.DataDir == "" {
 		return rawdb.NewMemoryDatabase(), nil
@@ -661,7 +662,8 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, freezer,
 	case !filepath.IsAbs(freezer):
 		freezer = n.config.ResolvePath(freezer)
 	}
-	return rawdb.NewLevelDBDatabaseWithFreezer(root, cache, handles, freezer, namespace)
+    //return rawdb.NewLevelDBDatabaseWithFreezer(root, cache, handles, freezer, namespace)
+    return rawdb.NewLevelDBDatabaseWithFreezer(root, cache, handles, freezer, namespace)
 }
 
 // ResolvePath returns the absolute path of a resource in the instance directory.

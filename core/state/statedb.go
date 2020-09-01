@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"sort"
 	"time"
+    "encoding/binary"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -32,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+    "github.com/ethereum/go-ethereum/ethdb"
 )
 
 type revision struct {
@@ -64,8 +66,11 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db   Database
-	trie Trie
+	db          Database
+    researchdb  ethdb.Database
+    trie        Trie
+
+    curBlockheight  uint32
 
 	snaps         *snapshot.Tree
 	snap          snapshot.Snapshot
@@ -77,6 +82,8 @@ type StateDB struct {
 	stateObjects        map[common.Address]*stateObject
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
 	stateObjectsDirty   map[common.Address]struct{} // State objects modified in the current execution
+
+    stateObjectsCount uint64
 
 	// DB error.
 	// State objects are used by the consensus core and VM which are
@@ -116,13 +123,14 @@ type StateDB struct {
 }
 
 // Create a new state from a given trie.
-func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) {
+func New(root common.Hash, db Database, snaps *snapshot.Tree, rdb ethdb.Database) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
 		return nil, err
 	}
 	sdb := &StateDB{
 		db:                  db,
+        researchdb:          rdb,
 		trie:                tr,
 		snaps:               snaps,
 		stateObjects:        make(map[common.Address]*stateObject),
@@ -745,7 +753,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 		}
 		if obj.suicided || (deleteEmptyObjects && obj.empty()) {
 			obj.deleted = true
-
+            s.stateObjectsCount--
 			// If state snapshotting is active, also mark the destruction there.
 			// Note, we can't do this only at the end of a block because multiple
 			// transactions within the same block might self destruct and then
@@ -873,4 +881,56 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 		s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
 	}
 	return root, err
+}
+
+func (s *StateDB) SetCurBlockheight(bh uint32) {
+    s.curBlockheight = bh
+}
+
+// returns the number of current state objects
+func (s *StateDB) GetStateObjectsCount() uint64 {
+    return s.stateObjectsCount
+}
+
+func (s *StateDB) ResearchDB() ethdb.Database {
+    return s.researchdb
+}
+
+func serializeHeightValues(heights []uint32) []byte {
+    var bytes []byte
+    for _, v := range heights {
+        _a := make([]byte, 4)
+        binary.LittleEndian.PutUint32(_a, v)
+        bytes = append(bytes, _a[:]...)
+    }
+    return bytes
+}
+
+func deserializeHeightValues(bytes []byte) []uint32 {
+    var heights []uint32
+    for i := 0; i < len(bytes); i = i + 4 {
+        v := binary.LittleEndian.Uint32(bytes[i:i+3])
+        heights = append(heights, v)
+    }
+    return heights
+}
+
+
+func (s *StateDB) commitVisits() {
+    var _v []uint32
+    for addr, _ := range(s.stateObjectsPending) {
+        heightBytes, err := s.researchdb.Get(addr.Bytes())
+        if err != nil {
+            _v = make([]uint32, 1)
+            _v[0] = s.curBlockheight
+        } else {
+            _v = deserializeHeightValues(heightBytes)
+            _v = append(_v[:], s.curBlockheight)
+        }
+        inV := serializeHeightValues(_v)
+        err = s.researchdb.Put(addr.Bytes(), inV)
+        if err != nil {
+            panic("fail commit state metric into state metric leveldb")
+        }
+    }
 }

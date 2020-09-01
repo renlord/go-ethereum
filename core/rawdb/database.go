@@ -177,10 +177,10 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, freezer string, namespace st
 	// Freezer is consistent with the key-value database, permit combining the two
 	go frdb.freeze(db)
 
-	return &freezerdb{
-		KeyValueStore: db,
-		AncientStore:  frdb,
-	}, nil
+    return &freezerdb{
+        KeyValueStore: db,
+        AncientStore: frdb,
+    }, nil
 }
 
 // NewMemoryDatabase creates an ephemeral in-memory key-value database without a
@@ -213,7 +213,7 @@ func NewLevelDBDatabaseWithFreezer(file string, cache int, handles int, freezer 
 	if err != nil {
 		return nil, err
 	}
-	frdb, err := NewDatabaseWithFreezer(kvdb, freezer, namespace)
+    frdb, err := NewDatabaseWithFreezer(kvdb, freezer, namespace)
 	if err != nil {
 		kvdb.Close()
 		return nil, err

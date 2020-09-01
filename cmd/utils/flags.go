@@ -161,6 +161,10 @@ var (
 		Name:  "identity",
 		Usage: "Custom node name",
 	}
+    ResearchFlag = cli.StringFlag{
+        Name: "research",
+        Usage: "RESEARCH use only",
+    }
 	DocRootFlag = DirectoryFlag{
 		Name:  "docroot",
 		Usage: "Document Root for HTTPClient file scheme",
@@ -791,6 +795,12 @@ func setNodeUserIdent(ctx *cli.Context, cfg *node.Config) {
 	if identity := ctx.GlobalString(IdentityFlag.Name); len(identity) > 0 {
 		cfg.UserIdent = identity
 	}
+}
+
+func setResearch(ctx *cli.Context, cfg *node.Config) {
+    if research := ctx.GlobalString(ResearchFlag.Name); len(research) > 0 {
+        cfg.ResearchToggle = true
+    }
 }
 
 // setBootstrapNodes creates a list of bootstrap nodes from the command line
@@ -1827,6 +1837,20 @@ func MakeChainDatabase(ctx *cli.Context, stack *node.Node) ethdb.Database {
 	return chainDb
 }
 
+func MakeResearchDB(ctx *cli.Context, stack *node.Node) ethdb.Database {
+	var (
+		cache   = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheDatabaseFlag.Name) / 100
+		handles = makeDatabaseHandles()
+
+		err     error
+	)
+    rdb, err := stack.OpenDatabase("research", cache, handles, "research")
+	if err != nil {
+		Fatalf("Could not open database: %v", err)
+	}
+	return rdb
+}
+
 func MakeGenesis(ctx *cli.Context) *core.Genesis {
 	var genesis *core.Genesis
 	switch {
@@ -1848,9 +1872,10 @@ func MakeGenesis(ctx *cli.Context) *core.Genesis {
 func MakeChain(ctx *cli.Context, stack *node.Node, readOnly bool) (chain *core.BlockChain, chainDb ethdb.Database) {
 	var err error
 	chainDb = MakeChainDatabase(ctx, stack)
+    researchDb := MakeResearchDB(ctx, stack)
 	config, _, err := core.SetupGenesisBlock(chainDb, MakeGenesis(ctx))
 	if err != nil {
-		Fatalf("%v", err)
+        Fatalf("%v", err)
 	}
 	var engine consensus.Engine
 	if config.Clique != nil {
@@ -1896,7 +1921,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readOnly bool) (chain *core.B
 		l := ctx.GlobalUint64(TxLookupLimitFlag.Name)
 		limit = &l
 	}
-	chain, err = core.NewBlockChain(chainDb, cache, config, engine, vmcfg, nil, limit)
+	chain, err = core.NewBlockChain(chainDb, researchDb, cache, config, engine, vmcfg, nil, limit)
 	if err != nil {
 		Fatalf("Can't create BlockChain: %v", err)
 	}

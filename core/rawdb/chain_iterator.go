@@ -174,9 +174,11 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		}
 	}
 	go lookup() // start the sequential db accessor
-	for i := 0; i < int(threads); i++ {
-		go process()
-	}
+    //for i := 0; i < int(threads); i++ {
+	//	go process()
+	//}
+    // TODO: test single threaded chain iterator
+    go process()
 	return hashesCh, abortCh
 }
 

@@ -68,6 +68,12 @@ func (ctx *ServiceContext) OpenDatabaseWithFreezer(name string, cache int, handl
 	return rawdb.NewLevelDBDatabaseWithFreezer(root, cache, handles, freezer, namespace)
 }
 
+func (ctx *ServiceContext) OpenResearchDatabase(name string, cache int, handles int, namespace string) (ethdb.Database, error) {
+	root := ctx.Config.ResolvePath(name)
+    researchName := filepath.Join(root, "research")
+	return rawdb.NewLevelDBDatabase(researchName, cache, handles, namespace)
+}
+
 // ResolvePath resolves a user path into the data directory if that was relative
 // and if the user actually uses persistent storage. It will return an empty string
 // for emphemeral storage and the user's own input for absolute paths.

@@ -116,6 +116,7 @@ func NewDatabaseWithCache(db ethdb.Database, cache int, journal string) Database
 
 type cachingDB struct {
 	db            *trie.Database
+    // TODO: add research metric counter
 	codeSizeCache *lru.Cache
 }
 
