@@ -18,12 +18,13 @@
 package state
 
 import (
+    "bytes"
 	"errors"
 	"fmt"
 	"math/big"
 	"sort"
 	"time"
-    "encoding/binary"
+    "encoding/gob"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -70,7 +71,7 @@ type StateDB struct {
     researchdb  ethdb.Database
     trie        Trie
 
-    curBlockheight  uint32
+    curBlockheight  uint64
 
 	snaps         *snapshot.Tree
 	snap          snapshot.Snapshot
@@ -82,6 +83,7 @@ type StateDB struct {
 	stateObjects        map[common.Address]*stateObject
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
 	stateObjectsDirty   map[common.Address]struct{} // State objects modified in the current execution
+    getObjects          map[common.Address]struct{} // used to track state objects that got retrieved
 
     stateObjectsCount uint64
 
@@ -133,6 +135,7 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree, rdb ethdb.Database
         researchdb:          rdb,
 		trie:                tr,
 		snaps:               snaps,
+        getObjects:          make(map[common.Address]struct{}),
 		stateObjects:        make(map[common.Address]*stateObject),
 		stateObjectsPending: make(map[common.Address]struct{}),
 		stateObjectsDirty:   make(map[common.Address]struct{}),
@@ -497,6 +500,7 @@ func (s *StateDB) deleteStateObject(obj *stateObject) {
 // to differentiate between non-existent/just-deleted, use getDeletedStateObject.
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	if obj := s.getDeletedStateObject(addr); obj != nil && !obj.deleted {
+        s.getObjects[addr] = struct{}{}
 		return obj
 	}
 	return nil
@@ -653,9 +657,11 @@ func (s *StateDB) Copy() *StateDB {
 	state := &StateDB{
 		db:                  s.db,
 		trie:                s.db.CopyTrie(s.trie),
+        curBlockheight:      s.curBlockheight,
 		stateObjects:        make(map[common.Address]*stateObject, len(s.journal.dirties)),
 		stateObjectsPending: make(map[common.Address]struct{}, len(s.stateObjectsPending)),
 		stateObjectsDirty:   make(map[common.Address]struct{}, len(s.journal.dirties)),
+        getObjects:          make(map[common.Address]struct{}, len(s.getObjects)),
 		refund:              s.refund,
 		logs:                make(map[common.Hash][]*types.Log, len(s.logs)),
 		logSize:             s.logSize,
@@ -693,6 +699,9 @@ func (s *StateDB) Copy() *StateDB {
 		}
 		state.stateObjectsDirty[addr] = struct{}{}
 	}
+    for addr := range s.getObjects {
+        state.getObjects[addr] = struct{}{}
+    }
 	for hash, logs := range s.logs {
 		cpy := make([]*types.Log, len(logs))
 		for i, l := range logs {
@@ -845,6 +854,12 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 	if metrics.EnabledExpensive {
 		start = time.Now()
 	}
+
+    // commit visits to researchdb
+    if s.researchdb != nil {
+        s.commitVisits()
+    }
+
 	// The onleaf func is called _serially_, so we can reuse the same account
 	// for unmarshalling every time.
 	var account Account
@@ -883,7 +898,7 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 	return root, err
 }
 
-func (s *StateDB) SetCurBlockheight(bh uint32) {
+func (s *StateDB) SetCurBlockheight(bh uint64) {
     s.curBlockheight = bh
 }
 
@@ -896,32 +911,34 @@ func (s *StateDB) ResearchDB() ethdb.Database {
     return s.researchdb
 }
 
-func serializeHeightValues(heights []uint32) []byte {
-    var bytes []byte
-    for _, v := range heights {
-        _a := make([]byte, 4)
-        binary.LittleEndian.PutUint32(_a, v)
-        bytes = append(bytes, _a[:]...)
+func serializeHeightValues(heights []uint64) []byte {
+    var bytes bytes.Buffer
+    enc := gob.NewEncoder(&bytes)
+    err := enc.Encode(heights)
+    if err != nil {
+        panic("cant encode height values")
     }
-    return bytes
+    return bytes.Bytes()
 }
 
-func deserializeHeightValues(bytes []byte) []uint32 {
-    var heights []uint32
-    for i := 0; i < len(bytes); i = i + 4 {
-        v := binary.LittleEndian.Uint32(bytes[i:i+3])
-        heights = append(heights, v)
+func deserializeHeightValues(b []byte) []uint64 {
+    var heights []uint64
+    buf := bytes.NewBuffer(b)
+    dec := gob.NewDecoder(buf)
+    err := dec.Decode(&heights)
+    if err != nil {
+        panic("cant encode height values")
     }
     return heights
 }
 
 
 func (s *StateDB) commitVisits() {
-    var _v []uint32
-    for addr, _ := range(s.stateObjectsPending) {
+    var _v []uint64
+    for addr, _ := range(s.getObjects) {
         heightBytes, err := s.researchdb.Get(addr.Bytes())
         if err != nil {
-            _v = make([]uint32, 1)
+            _v = make([]uint64, 1)
             _v[0] = s.curBlockheight
         } else {
             _v = deserializeHeightValues(heightBytes)
@@ -932,5 +949,8 @@ func (s *StateDB) commitVisits() {
         if err != nil {
             panic("fail commit state metric into state metric leveldb")
         }
+        //str, _ := json.Marshal(_v)
     }
+    log.Info("dumped address objects into leveldb(research)", "count", len(s.getObjects), "blockheight", s.curBlockheight)
+    s.getObjects = make(map[common.Address]struct{})
 }

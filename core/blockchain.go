@@ -1792,6 +1792,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
         statedb, err := state.New(parent.Root, bc.stateCache, bc.snaps, bc.researchDb)
+        statedb.SetCurBlockheight(bc.CurrentBlock().NumberU64())
 		if err != nil {
 			return it.index, err
 		}
