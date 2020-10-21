@@ -48,6 +48,12 @@ var (
 
 	// emptyCode is the known hash of the empty EVM bytecode.
 	emptyCode = crypto.Keccak256Hash(nil)
+
+    // getDeletedStateObject Source
+    STATEOBJECTLIVE uint8 = 1 // 0001
+    STATEOBJECTCACHE uint8 = 2 // 0010
+    STATEOBJECTSNAPSHOT uint8 = 4 // 0100
+    STATEOBJECTTRIEDB uint8 = 8 // 1000
 )
 
 type proofList [][]byte
@@ -83,7 +89,7 @@ type StateDB struct {
 	stateObjects        map[common.Address]*stateObject
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
 	stateObjectsDirty   map[common.Address]struct{} // State objects modified in the current execution
-    getObjects          map[common.Address]struct{} // used to track state objects that got retrieved
+    getObjects          map[common.Address]uint8 // used to track state objects that got retrieved
 
     stateObjectsCount uint64
 
@@ -135,7 +141,7 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree, rdb ethdb.Database
         researchdb:          rdb,
 		trie:                tr,
 		snaps:               snaps,
-        getObjects:          make(map[common.Address]struct{}),
+        getObjects:          make(map[common.Address]uint8),
 		stateObjects:        make(map[common.Address]*stateObject),
 		stateObjectsPending: make(map[common.Address]struct{}),
 		stateObjectsDirty:   make(map[common.Address]struct{}),
@@ -495,12 +501,19 @@ func (s *StateDB) deleteStateObject(obj *stateObject) {
 	}
 }
 
+func (s *StateDB) logAccessForStateObject(addr common.Address, accessType uint8) {
+    if v, exists := s.getObjects[addr]; exists {
+        s.getObjects[addr] = v | accessType;
+    } else {
+        s.getObjects[addr] = accessType;
+    }
+}
+
 // getStateObject retrieves a state object given by the address, returning nil if
 // the object is not found or was deleted in this execution context. If you need
 // to differentiate between non-existent/just-deleted, use getDeletedStateObject.
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	if obj := s.getDeletedStateObject(addr); obj != nil && !obj.deleted {
-        s.getObjects[addr] = struct{}{}
 		return obj
 	}
 	return nil
@@ -513,6 +526,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 	// Prefer live objects if any is available
 	if obj := s.stateObjects[addr]; obj != nil {
+        s.logAccessForStateObject(addr, STATEOBJECTLIVE);
 		return obj
 	}
 	// If no live objects are available, attempt to use snapshots
@@ -542,6 +556,7 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 				data.Root = emptyRoot
 			}
 		}
+        s.logAccessForStateObject(addr, STATEOBJECTSNAPSHOT);
 	}
 	// If snapshot unavailable or reading from it failed, load from the database
 	if s.snap == nil || err != nil {
@@ -557,6 +572,7 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 			return nil
 		}
 		data = new(Account)
+        s.logAccessForStateObject(addr, STATEOBJECTTRIEDB);
 		if err := rlp.DecodeBytes(enc, data); err != nil {
 			log.Error("Failed to decode state object", "addr", addr, "err", err)
 			return nil
@@ -661,7 +677,7 @@ func (s *StateDB) Copy() *StateDB {
 		stateObjects:        make(map[common.Address]*stateObject, len(s.journal.dirties)),
 		stateObjectsPending: make(map[common.Address]struct{}, len(s.stateObjectsPending)),
 		stateObjectsDirty:   make(map[common.Address]struct{}, len(s.journal.dirties)),
-        getObjects:          make(map[common.Address]struct{}, len(s.getObjects)),
+        getObjects:          make(map[common.Address]uint8, len(s.getObjects)),
 		refund:              s.refund,
 		logs:                make(map[common.Hash][]*types.Log, len(s.logs)),
 		logSize:             s.logSize,
@@ -700,7 +716,7 @@ func (s *StateDB) Copy() *StateDB {
 		state.stateObjectsDirty[addr] = struct{}{}
 	}
     for addr := range s.getObjects {
-        state.getObjects[addr] = struct{}{}
+        state.getObjects[addr] = s.getObjects[addr];
     }
 	for hash, logs := range s.logs {
 		cpy := make([]*types.Log, len(logs))
@@ -911,7 +927,7 @@ func (s *StateDB) ResearchDB() ethdb.Database {
     return s.researchdb
 }
 
-func serializeHeightValues(heights []uint64) []byte {
+func serializeHeightValues(heights []*AccessTuple) []byte {
     var bytes bytes.Buffer
     enc := gob.NewEncoder(&bytes)
     err := enc.Encode(heights)
@@ -921,8 +937,8 @@ func serializeHeightValues(heights []uint64) []byte {
     return bytes.Bytes()
 }
 
-func deserializeHeightValues(b []byte) []uint64 {
-    var heights []uint64
+func deserializeHeightValues(b []byte) []*AccessTuple {
+    var heights []*AccessTuple
     buf := bytes.NewBuffer(b)
     dec := gob.NewDecoder(buf)
     err := dec.Decode(&heights)
@@ -932,17 +948,21 @@ func deserializeHeightValues(b []byte) []uint64 {
     return heights
 }
 
+type AccessTuple struct {
+    Blockheight uint64
+    AccessType  uint8
+}
 
 func (s *StateDB) commitVisits() {
-    var _v []uint64
-    for addr, _ := range(s.getObjects) {
+    var _v []*AccessTuple
+    for addr, _ := range s.getObjects {
         heightBytes, err := s.researchdb.Get(addr.Bytes())
         if err != nil {
-            _v = make([]uint64, 1)
-            _v[0] = s.curBlockheight
+            _v = make([]*AccessTuple, 1)
+            _v[0] = &AccessTuple{s.curBlockheight, s.getObjects[addr]}
         } else {
             _v = deserializeHeightValues(heightBytes)
-            _v = append(_v[:], s.curBlockheight)
+            _v = append(_v[:], &AccessTuple{s.curBlockheight, s.getObjects[addr]})
         }
         inV := serializeHeightValues(_v)
         err = s.researchdb.Put(addr.Bytes(), inV)
@@ -952,5 +972,5 @@ func (s *StateDB) commitVisits() {
         //str, _ := json.Marshal(_v)
     }
     log.Info("dumped address objects into leveldb(research)", "count", len(s.getObjects), "blockheight", s.curBlockheight)
-    s.getObjects = make(map[common.Address]struct{})
+    s.getObjects = make(map[common.Address]uint8)
 }
